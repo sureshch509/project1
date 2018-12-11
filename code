@@ -39,7 +39,7 @@ object Sparkexe{
  spark-submit:
  
  # the two most important settings:
-num_executors=6
+num_executors=15
 executor_memory=10g
 
 # 3-5 cores per executor is a good default balancing HDFS client throughput vs. JVM overhead
