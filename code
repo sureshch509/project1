@@ -1,3 +1,12 @@
+//sbt
+//build.properties
+name:="SparkExe"
+version:="1.0"
+scalaVersion:="2.11.8"
+LibraryDependencies++=Seq( "org.apache.spark" %% "spark-core" % "2.0.0",
+                            "org.apache.spark" %% "spark-sql" % "2.0.0)
+
+
 package sparkproject
 
 import org.apache.spark.sql.SparkSession
@@ -12,63 +21,29 @@ object Sparkexe{
                         .getOrCreate()
                         
                         
- val parquetdf = spark.read.parquet("/users/cloudera/setup/sample_data/parq.parquet")
- parquetdf.printSchema()
- parquetdf.createOrReplaceTempView("table")
+ val parquetdf = spark.read.parquet("/users/cloudera/sample_data/parq.parquet")
  
- spark.sql(select (t.entity_id, t.total_signals,
-                   tmin.item_id as item_id_min_month,
-                   tmax.item_id as item_id_max_month
-                   from (select t.entity_id, sum(signal_count) as  total_signals,
-                   min(month_id) as min_month_id,
-                   max(month_id) as max_month_id
-                   from table
-                   )) t join
-                   t tmin
-                   on tmin.entity_id = t.entity_id and
-                   tmin.month_id = t.min_month_id join
-                   t tmax
-                   on tmax.entity_id = t.entity_id and
-                   tmax.month_id = t.max_month_id)
-                   
-  spark.stop()
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.expressions._
+
+val w = Window.partitionBy($"entity_id")
+val df2 =(df.groupBy("entity_id","item_id","month_id").agg(sum($"signal_count").as("count1")).
+         withColumn("total_signals",sum($"count1").over(w))).drop("count1")
+
+val df3 = df2.select("entity_id","item_id","month_id","total_signals").
+            withColumn("new",lead(("item_id"),1,0).over(Window.partitionBy("month_id").orderBy("item_id"))).
+            withColumn("old",lag(("item_id"),1,0).over(Window.partitionBy("month_id").orderBy("item_id"))).
+            withColumn("rn",row_number.over(Window.partitionBy("entity_id").orderBy('item_id))).filter($"rn"===1).
+            select("entity_id","old","new","total_signals")
+
+df3.show
+
+df3.repartition(1).write.parquet("/user/cloudera/sample_data/result.parquet")
+ 
+spark.stop()
   
   
- ////
- 
- spark-submit:
- 
- # the two most important settings:
-num_executors=15
-executor_memory=10g
 
-# 3-5 cores per executor is a good default balancing HDFS client throughput vs. JVM overhead
-# see http://blog.cloudera.com/blog/2015/03/how-to-tune-your-apache-spark-jobs-part-2/
-executor_cores=3
-
-
-spark-submit --master yarn --deploy-mode client \
-  --name <my-job-name> \
-  --class <main-class> \
-  --driver-memory 4g \
-  --num-executors ${num_executors} --executor-cores ${executor_cores} --executor-memory ${executor_memory} \
-  --queue <realtime_queue> \
-  --files <hdfs:///path/to/log4j-yarn.properties> \
-  --conf spark.driver.extraJavaOptions=-Dlog4j.configuration=log4j-yarn.properties \
-  --conf spark.executor.extraJavaOptions=-Dlog4j.configuration=log4j-yarn.properties \
-  --conf spark.serializer=org.apache.spark.serializer.KryoSerializer `# Kryo Serializer is much faster than the default Java Serializer` \
-  --conf spark.locality.wait=10 `# Increase job parallelity by reducing Spark Delay Scheduling (potentially big performance impact (!)) (Default: 3s)` \
-  --conf spark.task.maxFailures=8 `# Increase max task failures before failing job (Default: 4)` \
-  --conf spark.ui.killEnabled=false `# Prevent killing of stages and corresponding jobs from the Spark UI` \
-  --conf spark.logConf=true `# Log Spark Configuration in driver log for troubleshooting` \
-  yarn conf:
-   --conf spark.yarn.driver.memoryOverhead=2g \
-  --conf spark.yarn.executor.memoryOverhead=3g \
-  --conf spark.yarn.maxAppAttempts=4  \
-  --conf spark.yarn.am.attemptFailuresValidityInterval=1h `# Attempt counter considers only the last hour (Default: (none))` \
-  --conf spark.yarn.max.executor.failures=$((8 * ${num_executors})) `# Increase max executor failures (Default: max(numExecutors * 2, 3))` \
-  --conf spark.yarn.executor.failuresValidityInterval=1h `# Executor failure counter considers only the last hour` \
-  </path/to/spark-application.jar>
  
  
   
